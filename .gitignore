@@ -1,0 +1,16 @@
+2020_03_12_UDP_C_example/marvelmind_udp_c_library_and_example.pdf
+2020_03_12_UDP_C_example/source/Makefile
+2020_03_12_UDP_C_example/source/marvelmind_udp_c.cbp
+py_example/README.md
+2020_03_12_UDP_C_example/source/udp_example.c
+2020_03_12_UDP_C_example/source/udp_marvelmind.c
+2020_03_12_UDP_C_example/source/udp_marvelmind.h
+2020_03_12_UDP_C_example/windows/marvelmind_udp_c.exe
+py_example/src/example_matplotlib.py
+py_example/src/example.py
+py_example/src/marvelmind.py
+py_example/src/__pycache__/marvelmind.cpython-39.pyc
+py_example/src/examples_imu_plotter/example_imu_plotter.py
+py_example/src/examples_imu_plotter/marvelmind.py
+py_example/src/examples_imu_plotter/plotter3d2.py
+py_example/src/examples_imu_plotter/readme.txt
