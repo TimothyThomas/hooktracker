@@ -2,6 +2,8 @@ import socket
 import logging
 import time
 
+import PySimpleGUIQt as sg
+
 def main():
     logging.basicConfig(level=logging.INFO)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -13,6 +15,21 @@ def main():
     logging.info(f'Binding to UDP socket {udp_ip}:{udp_port}.')
     sock.bind(('localhost', udp_port))
 
+    sg.theme('DarkAmber')   # Add a touch of color
+    # All the stuff inside your window.
+    layout = [  [sg.Text('Some text on Row 1')],
+                [sg.Text('Enter something on Row 2'), sg.InputText()],
+                [sg.Button('Ok'), sg.Button('Cancel')] ]
+    
+    # Create the Window
+    window = sg.Window('Window Title', layout)
+    # Event Loop to process "events" and get the "values" of the inputs
+    while True:
+        event, values = window.read()
+        if event == sg.WIN_CLOSED or event == 'Cancel': # if user closes window or clicks cancel
+            break
+        print('You entered ', values[0])
+    
     while True:
         data, addr = sock.recvfrom(2048)
         logging.info(f"Received message: {data}")
@@ -34,10 +51,11 @@ def main():
         logging.info(f"data_code: {data_code}")
         logging.info(f"data_size: {data_size}")
         logging.info(f"timestamp: {timestamp}")
-        logging.info(f"X={xpos}, Y={ypos}, Z={zpos}")
+        logging.info(f"X={x_mm}, Y={y_mm}, Z={z_mm}")
 
         time.sleep(2.)
 
+    window.close()
 
 
 if __name__ == '__main__':
