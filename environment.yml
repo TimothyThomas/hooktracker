@@ -1,0 +1,32 @@
+name: hooktracker
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - ca-certificates=2020.11.8=h5b45459_0
+  - certifi=2020.11.8=py39hcbf5309_0
+  - icu=67.1=h33f27b4_0
+  - jpeg=9d=h8ffe710_0
+  - libclang=10.0.1=default_hf44288c_1
+  - libiconv=1.16=he774522_0
+  - libpng=1.6.37=h1d00b33_2
+  - libxml2=2.9.10=h1006b36_2
+  - libxslt=1.1.33=h579f668_1
+  - openssl=1.1.1h=he774522_0
+  - pip=20.2.4=py39haa95532_0
+  - pyserial=3.4=py_2
+  - pyside2=5.13.2=py39hc1b2f35_3
+  - pysimpleguiqt=0.35.0=py_0
+  - python=3.9.0=h6244533_2
+  - python_abi=3.9=1_cp39
+  - qt=5.12.9=hb2cf2c5_0
+  - setuptools=50.3.1=py39haa95532_1
+  - sqlite=3.33.0=h2a8f88b_0
+  - tzdata=2020d=h14c3975_0
+  - vc=14.1=h0510ff6_4
+  - vs2015_runtime=14.16.27012=hf0eaf9b_3
+  - wheel=0.35.1=pyhd3eb1b0_0
+  - wincertstore=0.2=py39h2bbff1b_0
+  - zlib=1.2.11=h62dcd97_4
+prefix: C:\Users\tim-gaming-desktop\miniconda3\envs\hooktracker
+
