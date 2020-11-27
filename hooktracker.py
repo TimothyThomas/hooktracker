@@ -3,20 +3,22 @@ import logging
 import time
 import sys
 import os
+import tailer
+import winsound
 from pathlib import Path
 
 import PySimpleGUIQt as sg
 from file_read_backwards import FileReadBackwards
 
 DASHBOARD_UDP_PORT = 49100
-COORDINATE_PRECISION = 0    # number of digits after decimal
+COORDINATE_PRECISION = 1    # number of digits after decimal
 UPDATE_FREQUENCY = 1000      # time in milliseconds
-COORDINATE_UNITS = 'feet.inches'  #  feet.inches, inches, mm
+COORDINATE_UNITS = 'm'  #  feet.inches, inches, mm, m
 LOG_FILE_DIRECTORY = Path('C:\Marvelmind\dashboard\logs')
 LOGFILE_LINE_INDEX_FROM_END = 2   # Recommended value is 2.  e.g., if =2, read second line counting from end of logfile
                                   # We don't want to read the last line of the logfile because it is often not completely
                                   # written at the time it is read.
-HEDGE_ADDR = 36
+HEDGE_ADDRS = [36, 38]  # list of addresses to be tracked. 
 
 
 def connect_to_udp_stream():
@@ -79,7 +81,6 @@ def get_hedge_pos_udp():
     return x, y, z
 
 
-
 def get_hedge_logfile():
     """Find the log file by selecting the file with the most recent modification time in the logfile directory.
     If no file found, return None."""
@@ -91,87 +92,105 @@ def get_hedge_logfile():
         if mtime > max_m_time:
             max_m_time = mtime
             current_log = lf
+    if current_log:
+        logging.info(f"Reading hedge logfile {current_log}.")
+    else:
+        logging.info(f"No hedge log found. Ensure hedge logfile is being written and restart program.")
+        sys.exit(1)
     return current_log
 
 
 def get_last_logfile_line(logfile, addr):
     """Return most recent complete line written to CSV log file for hedge addr.""" 
-    #  Use this method so we don't have to read the entire file:
-    #  stackoverflow.com/a/54278929
-    with open(logfile, 'rb') as f:
-        f.seek(-2, os.SEEK_END)
-        end_lines = 0
-        line_found = False
-        while not line_found:
-            while end_lines < LOGFILE_LINE_INDEX_FROM_END:
-                next_char = f.read(1)
-                if next_char == b'\n' :
-                    end_lines += 1
-                if end_lines < LOGFILE_LINE_INDEX_FROM_END:
-                    f.seek(-2, os.SEEK_CUR)
-            last_line = f.readline().decode()
-            last_line_fields = [x for x in last_line.strip().split(',') if x]  # we want to ignore the final empty field since most lines end with ','
-            if int(last_line_fields[3]) == addr:
-                line_found = True
-            else:
-                end_lines = 1
+    addr_found = False
+    last_line = None 
+    fields = []
+    while not addr_found:
+        with open(logfile, 'r') as f:
+            lastlines = tailer.tail(f, 10)[:-2]  # exclude final line since it may only be partially written
+        for line in lastlines[::-1]:  # iterate in reverse order to process latest data first
+            fields = [x for x in line.strip().split(',') if x]  # we want to ignore the final empty field since most lines end with ','
+            try:
+                if int(fields[3]) == addr:
+                    addr_found = True
+                    last_line = line
+                    break
+            except IndexError:
+                continue
         logging.info(f'Logfile data: {last_line}')
-    return last_line_fields
+    return fields 
 
 def parse_log_file_fields(fields):
     unix_time = int(fields[0])
     addr = int(fields[3])
     x_m, y_m, z_m = float(fields[4]), float(fields[5]), float(fields[6])
-    logging.info(f'exclusion zone field: {fields[-6:]}')
     in_exclusion_zone = True if int(fields[-4]) else False
+    logging.info(f"Data for address: {addr}")
+    logging.info(f"timestamp: {unix_time}")
+    logging.info(f"X={x_m}, Y={y_m}, Z={z_m}")
+    return x_m, y_m, z_m, unix_time, in_exclusion_zone
     
+
+def get_hedge_position_from_log(logfile):
+    # dictionary of hedge addr and x,y,z (as tuple) position
+    positions = {}
+    in_exclusion_zone = False
+    for addr in HEDGE_ADDRS:
+        log_data = get_last_logfile_line(logfile, addr)
+        x, y, z, unix_time, in_ez = parse_log_file_fields(log_data)
+        positions[addr] = (x,y,z)
+        if in_ez:
+            in_exclusion_zone = True  # if any hedge is in an exclusion zone, we return True 
+
+    if len(HEDGE_ADDRS) == 1:
+        x,y,z = positions[HEDGE_ADDRS[0]]
+    else:
+        # Get average of all hedges
+        x = sum([positions[addr][0] for addr in HEDGE_ADDRS]) / len(HEDGE_ADDRS)
+        y = sum([positions[addr][1] for addr in HEDGE_ADDRS]) / len(HEDGE_ADDRS)
+        z = sum([positions[addr][2] for addr in HEDGE_ADDRS]) / len(HEDGE_ADDRS)
+
+    # X,Y,Z coordinates from logfile are in meters
     fmt = f'.{COORDINATE_PRECISION}f'
     if COORDINATE_UNITS == 'feet.inches':
-        x = f"""{x_m / 0.0254 // 12}\' {x_m / 0.0254 % 12:{fmt}}\""""
-        y = f"""{y_m / 0.0254 // 12}\' {y_m / 0.0254 % 12:{fmt}}\""""
-        z = f"""{z_m / 0.0254 // 12}\' {z_m / 0.0254 % 12:{fmt}}\""""
+        x_str = f"""{x / 0.0254 // 12}\' {x / 0.0254 % 12:{fmt}}\""""
+        y_str = f"""{y / 0.0254 // 12}\' {y / 0.0254 % 12:{fmt}}\""""
+        z_str = f"""{z / 0.0254 // 12}\' {z / 0.0254 % 12:{fmt}}\""""
     
     elif COORDINATE_UNITS == 'inches':
-        x = f'{x_m / 0.0254:{fmt}}'
-        y = f'{y_m / 0.0254:{fmt}}'
-        z = f'{z_m / 0.0254:{fmt}}'
+        x_str = f'{x / 0.0254:{fmt}} inches'
+        y_str = f'{y / 0.0254:{fmt}} inches'
+        z_str = f'{z / 0.0254:{fmt}} inches'
     
     elif COORDINATE_UNITS == 'mm':
-        x = f'{x_m/1000.:{fmt}}'
-        y = f'{y_m/1000.:{fmt}}'
-        z = f'{z_m/1000.:{fmt}}'
+        x_str = f'{x/1000.:{fmt}} mm'
+        y_str = f'{y/1000.:{fmt}} mm'
+        z_str = f'{z/1000.:{fmt}} mm'
+
+    elif COORDINATE_UNITS == 'm':
+        x_str = f'{x:{fmt}} m'
+        y_str = f'{y:{fmt}} m'
+        z_str = f'{z:{fmt}} m'
 
     else:
         logging.error('invalid COORDINATE_UNITS input. Exiting.')
         sys.exit(1)
-
-    logging.info(f"Data for address: {addr}")
-    logging.info(f"timestamp: {unix_time}")
-    logging.info(f"X={x}, Y={y}, Z={z}")
-
-    return x, y, z, addr, unix_time, in_exclusion_zone
+    
+    return x_str, y_str, z_str, in_exclusion_zone
 
 
 def main():
     logging.basicConfig(level=logging.INFO)
 
     hedge_log = get_hedge_logfile()
-    if hedge_log:
-        logging.info(f"Reading hedge logfile {hedge_log}.")
-    else:
-        logging.info(f"No hedge log found. Ensure hedge logfile is being written and restart program.")
-        sys.exit(1)
-    
-    #x,y,z = get_hedge_pos_udp()
-
-    log_data = get_last_logfile_line(hedge_log, HEDGE_ADDR)
-    x, y, z, addr, unix_time, in_exclusion_zone = parse_log_file_fields(log_data)
+    x,y,z,in_ez = get_hedge_position_from_log(hedge_log)
 
     sg.theme('DarkBlue13')   # Add a touch of color
     # All the stuff inside your window.
     layout = [
-                [sg.Image('logo/RVB_FRAMATOME_HD_10pct.png')],
+                [sg.Image('assets/RVB_FRAMATOME_HD_10pct.png')],
                 [sg.Text('Crane Hook Tracker', size=(30,2), font=('Work Sans', 14), justification='center')],
+                [sg.Text('', size=(30,2), font=('Work Sans', 14), justification='center')],
                 [sg.Text(f'X: {x}', size=(30,1), font=('Work Sans', 20), justification='center', key='-XPOS-')],
                 [sg.Text(f'Y: {y}', size=(30,1), font=('Work Sans', 20), justification='center', key='-YPOS-')],
                 [sg.Text(f'Z: {z}', size=(30,1), font=('Work Sans', 20), justification='center', key='-ZPOS-')],
@@ -179,24 +198,25 @@ def main():
                 [sg.Button('Exit', font=('Work Sans', 12), size=(30,2))],
              ]
     
-    # Create the Window
-    window = sg.Window('Hook Tracker', layout)
-    # Event Loop to process "events" and get the "values" of the inputs
+    window = sg.Window('Hook Tracker', layout, icon='assets/favicon.ico')
+    in_exclusion_zone = False
     while True:
+        if in_ez:
+            logging.warning("WARNING: you have entered an exclusion zone!!")
+            winsound.PlaySound("assets/alarm2.wav", winsound.SND_ASYNC | winsound.SND_LOOP)
+        else:
+            winsound.PlaySound(None, winsound.SND_ASYNC)
         event, values = window.read(timeout=UPDATE_FREQUENCY)
-        logging.info((event, values))
-        log_data = get_last_logfile_line(hedge_log, HEDGE_ADDR)
+        logging.debug((event, values))
         if event in (sg.WIN_CLOSED,  'Exit'):
             break
 
-        #x,y,z = get_hedge_pos()
-        x, y, z, addr, unix_time, in_exclusion_zone = parse_log_file_fields(log_data)
+        hedge_log = get_hedge_logfile()
+        x,y,z,in_ez = get_hedge_position_from_log(hedge_log)
         window['-XPOS-'].update(f'X: {x}')
         window['-YPOS-'].update(f'Y: {y}')
         window['-ZPOS-'].update(f'Z: {z}')
 
-        if in_exclusion_zone:
-            logging.warn("WARNING: you have entered an exclusion zone!!")
 
     window.close()
 
