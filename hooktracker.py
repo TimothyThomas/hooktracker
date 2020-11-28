@@ -3,21 +3,17 @@ import logging
 import time
 import sys
 import os
-import tailer
 import winsound
 from pathlib import Path
 
 import PySimpleGUIQt as sg
-from file_read_backwards import FileReadBackwards
+import tailer
 
 DASHBOARD_UDP_PORT = 49100
 COORDINATE_PRECISION = 1    # number of digits after decimal
-UPDATE_FREQUENCY = 1000      # time in milliseconds
+UPDATE_FREQUENCY = 500      # time in milliseconds
 COORDINATE_UNITS = 'm'  #  feet.inches, inches, mm, m
 LOG_FILE_DIRECTORY = Path('C:\Marvelmind\dashboard\logs')
-LOGFILE_LINE_INDEX_FROM_END = 2   # Recommended value is 2.  e.g., if =2, read second line counting from end of logfile
-                                  # We don't want to read the last line of the logfile because it is often not completely
-                                  # written at the time it is read.
 HEDGE_ADDRS = [36, 38]  # list of addresses to be tracked. 
 
 
@@ -120,6 +116,7 @@ def get_last_logfile_line(logfile, addr):
         logging.info(f'Logfile data: {last_line}')
     return fields 
 
+
 def parse_log_file_fields(fields):
     unix_time = int(fields[0])
     addr = int(fields[3])
@@ -151,7 +148,7 @@ def get_hedge_position_from_log(logfile):
         z = sum([positions[addr][2] for addr in HEDGE_ADDRS]) / len(HEDGE_ADDRS)
 
     # X,Y,Z coordinates from logfile are in meters
-    fmt = f'.{COORDINATE_PRECISION}f'
+    fmt = f' .{COORDINATE_PRECISION}f'
     if COORDINATE_UNITS == 'feet.inches':
         x_str = f"""{x / 0.0254 // 12}\' {x / 0.0254 % 12:{fmt}}\""""
         y_str = f"""{y / 0.0254 // 12}\' {y / 0.0254 % 12:{fmt}}\""""
@@ -181,45 +178,60 @@ def get_hedge_position_from_log(logfile):
 
 def main():
     logging.basicConfig(level=logging.INFO)
-
-    hedge_log = get_hedge_logfile()
-    x,y,z,in_ez = get_hedge_position_from_log(hedge_log)
-
-    sg.theme('DarkBlue13')   # Add a touch of color
-    # All the stuff inside your window.
+    sg.theme('DarkBlue13')
     layout = [
-                [sg.Image('assets/RVB_FRAMATOME_HD_10pct.png')],
-                [sg.Text('Crane Hook Tracker', size=(30,2), font=('Work Sans', 14), justification='center')],
-                [sg.Text('', size=(30,2), font=('Work Sans', 14), justification='center')],
-                [sg.Text(f'X: {x}', size=(30,1), font=('Work Sans', 20), justification='center', key='-XPOS-')],
-                [sg.Text(f'Y: {y}', size=(30,1), font=('Work Sans', 20), justification='center', key='-YPOS-')],
-                [sg.Text(f'Z: {z}', size=(30,1), font=('Work Sans', 20), justification='center', key='-ZPOS-')],
-                [sg.Text(f'', size=(30,1))],
-                [sg.Button('Exit', font=('Work Sans', 12), size=(30,2))],
+                [sg.Image('assets/RVB_FRAMATOME_HD_15pct.png')],
+                [sg.Text('Crane Hook Tracker', justification='center', font=('Work Sans', 14))],
+                [sg.Text(' '*30)],
+                [sg.Text(' '*30)],
+                [sg.Text(justification='center', font=('Work Sans', 20), key='-XPOS-')],
+                [sg.Text(justification='center', font=('Work Sans', 20), key='-YPOS-')],
+                [sg.Text(justification='center', font=('Work Sans', 20), key='-ZPOS-')],
+                [sg.Text('_'*64)],
+                [sg.Text(' '*40)],
+                [sg.Text('   Status: ', size=(11,1), font=('Work Sans', 20)), 
+                 sg.Text('Acquiring Location', size=(30,1), font=('Work Sans', 20), justification='left', text_color='yellow', key='-MSG-')],
+                [sg.Text(' '*40)],
+                [sg.Text(' '*40)],
+                [sg.Button('Exit', font=('Work Sans', 12)), sg.Button('Settings', font=('Work Sans', 12))],
              ]
     
-    window = sg.Window('Hook Tracker', layout, icon='assets/favicon.ico')
+    window = sg.Window('Hook Tracker', 
+                        layout=layout, 
+                        resizable=False,
+                        icon='assets/favicon.ico'
+                       )
     in_exclusion_zone = False
+    msg_on = True  # funky way to make message flash 
     while True:
-        if in_ez:
-            logging.warning("WARNING: you have entered an exclusion zone!!")
-            winsound.PlaySound("assets/alarm2.wav", winsound.SND_ASYNC | winsound.SND_LOOP)
-        else:
-            winsound.PlaySound(None, winsound.SND_ASYNC)
         event, values = window.read(timeout=UPDATE_FREQUENCY)
         logging.debug((event, values))
+
         if event in (sg.WIN_CLOSED,  'Exit'):
             break
 
         hedge_log = get_hedge_logfile()
         x,y,z,in_ez = get_hedge_position_from_log(hedge_log)
+
+        if in_ez:
+            logging.warning("Hedge in an exclusion zone!!")
+            status_text = 'EXCLUSION ZONE' if msg_on else '' 
+            msg_on = False if msg_on else True
+            status_text_color = 'red'
+            winsound.PlaySound("assets/alarm2.wav", winsound.SND_ASYNC | winsound.SND_LOOP)
+            window['-MSG-'].update('INSIDE EXCLUSION ZONE')
+            window['-MSG-'].update(text_color='red')
+        else:
+            status_text = 'OK'
+            status_text_color = 'green'
+            winsound.PlaySound(None, winsound.SND_ASYNC)
+
+        window['-MSG-'].update(status_text)
+        window['-MSG-'].update(text_color=status_text_color)
         window['-XPOS-'].update(f'X: {x}')
         window['-YPOS-'].update(f'Y: {y}')
         window['-ZPOS-'].update(f'Z: {z}')
-
-
     window.close()
-
 
 if __name__ == '__main__':
     main()
