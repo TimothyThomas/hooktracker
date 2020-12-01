@@ -81,38 +81,6 @@ def create_settings_window(settings):
     return window
 
 
-def connect_to_udp_stream():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    #udp_ip = socket.gethostname()
-    udp_ip = 'localhost' 
-    logging.info(f'Binding to UDP socket {udp_ip}:{DASHBOARD_UDP_PORT}.')
-    sock.bind(('localhost', DASHBOARD_UDP_PORT))
-    return sock
-
-
-def get_hedge_pos_udp():
-    # TODO: add a timeout
-    sock = connect_to_udp_stream()
-    data, addr = sock.recvfrom(1024)
-    sock.close()
-    logging.info(f"Received message: {data}")
-    logging.info(f"Message length: {len(data)}")
-
-    # See marvelmind.com/pics/dashboard_udp_protocol.pdf
-    # This is the protocol for packets with mm resolution coordinates
-    # (dashboard V4.92+, modem/beacon V5.35)
-    addr = data[0] 
-    packet_type = data[1] 
-    data_size = data[4]
-    data_code = int.from_bytes(data[2:4], byteorder='little', signed=False)
-    timestamp = int.from_bytes(data[5:9], byteorder='little', signed=False) / 64
-    x_mm = int.from_bytes(data[9:13], byteorder='little', signed=True)
-    y_mm = int.from_bytes(data[13:17], byteorder='little', signed=True)
-    z_mm = int.from_bytes(data[17:21], byteorder='little', signed=True)
-
-    return x, y, z, timestamp
-
-
 def get_hedge_logfile(dir):
     """Find the log file by selecting the file with the most recent modification time in the logfile directory.
     If no file found, return None."""
@@ -206,6 +174,7 @@ def get_hedge_position_from_log(logfile, addrs, units='feet.inches', precision=0
         sys.exit(1)
     
     return x_str, y_str, z_str, unix_time, in_exclusion_zone
+
 
 def create_main_window(settings):
     sg.theme(settings['color_theme'])
