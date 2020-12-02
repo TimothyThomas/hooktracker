@@ -202,7 +202,7 @@ def create_main_window(settings):
                 [sg.Text(' '*40)],
                 [sg.Button('Exit', font=('Work Sans', 12)), sg.Button('Settings', font=('Work Sans', 12))],
              ]
-    return sg.Window('Hook Tracker', layout=layout, resizable=False, icon='assets/favicon.ico')
+    return sg.Window('Hook Tracker', layout=layout, keep_on_top=True, resizable=False, icon='assets/favicon.ico')
 
 
 def main():
