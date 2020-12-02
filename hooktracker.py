@@ -95,8 +95,7 @@ def get_hedge_logfile(dir):
     if current_log:
         logging.info(f"Reading hedge logfile {current_log}.")
     else:
-        logging.info(f"No hedge log found. Ensure hedge logfile is being written and restart program.")
-        sys.exit(1)
+        logging.warning(f"No hedge log found. Ensure hedge logfile is being written and correct address is entered in settings.")
     return current_log
 
 
@@ -105,7 +104,11 @@ def get_last_logfile_line(logfile, addr):
     addr_found = False
     last_line = None 
     fields = []
+    MAX_TRIES = 20 
+    tries = 0
     while not addr_found:
+        if tries >= MAX_TRIES:
+            return None
         with open(logfile, 'r') as f:
             lastlines = tailer.tail(f, 10)[:-2]  # exclude final line since it may only be partially written
         for line in lastlines[::-1]:  # iterate in reverse order to process latest data first
@@ -117,7 +120,7 @@ def get_last_logfile_line(logfile, addr):
                     break
             except IndexError:
                 continue
-        logging.info(f'Logfile data: {last_line}')
+        tries += 1
     return fields 
 
 
@@ -134,6 +137,11 @@ def get_hedge_position_from_log(logfile, addrs, units='feet.inches', precision=0
     in_exclusion_zone = False
     for addr in addrs:
         log_data = get_last_logfile_line(logfile, addr)
+        if not log_data:
+            logging.error(f'Unable to find log data for address {addr}.')
+            return None
+        else:
+            logging.info(f'Logfile data: {log_data}')
         x, y, z, unix_time, in_ez = parse_log_file_fields(log_data)
         positions[addr] = (x,y,z)
         if in_ez:
@@ -183,9 +191,9 @@ def create_main_window(settings):
                 [sg.Text('Crane Hook Tracker', justification='center', font=('Work Sans', 14))],
                 [sg.Text(' '*30)],
                 [sg.Text(' '*30)],
-                [sg.Text(justification='center', font=('Work Sans', 20), key='-XPOS-')],
-                [sg.Text(justification='center', font=('Work Sans', 20), key='-YPOS-')],
-                [sg.Text(justification='center', font=('Work Sans', 20), key='-ZPOS-')],
+                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-XPOS-')],
+                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-YPOS-')],
+                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-ZPOS-')],
                 [sg.Text('_'*64)],
                 [sg.Text(' '*40)],
                 [sg.Text('  Status:  ', size=(11,1), font=('Work Sans', 20)), 
@@ -225,13 +233,41 @@ def main():
             continue
 
         hedge_log = get_hedge_logfile(settings['log_dir'])
-        hedge_addrs = [int(x) for x in settings['hedge_addrs'].strip().split(',') if x]
-        logging.info(f"Tracking hedge addresses: {hedge_addrs}")
-        x,y,z,t,in_ez = get_hedge_position_from_log(hedge_log, 
-                                                    hedge_addrs, 
-                                                    units=settings['units'],
-                                                    precision=int(settings['precision']),
-                                                    )
+        if not hedge_log:
+            logging.error('No log file found. Check log directory in settings.')
+            window['-MSG-'].update('No log file found. Check\nlog directory in settings.')
+            window['-MSG-'].update(text_color='yellow')
+            window['-XPOS-'].update(f'X: ?')
+            window['-YPOS-'].update(f'Y: ?')
+            window['-ZPOS-'].update(f'Z: ?')
+            continue
+        else:
+            hedge_addrs = [int(x) for x in settings['hedge_addrs'].strip().split(',') if x]
+            if not hedge_addrs:
+                logging.error(f'No addresses to track.')
+                window['-MSG-'].update(f'No addresses entered\nin settings.')
+                window['-MSG-'].update(text_color='yellow')
+                window['-XPOS-'].update(f'X: ?')
+                window['-YPOS-'].update(f'Y: ?')
+                window['-ZPOS-'].update(f'Z: ?')
+                continue
+
+            logging.info(f"Tracking hedge addresses: {hedge_addrs}")
+            log_data = get_hedge_position_from_log(hedge_log, 
+                                                        hedge_addrs, 
+                                                        units=settings['units'],
+                                                        precision=int(settings['precision']),
+                                                        )
+            if not log_data:
+                logging.error(f'Unable to get logfile data for addresses {hedge_addrs}.')
+                window['-MSG-'].update(f'No data for addresses:\n{hedge_addrs}.')
+                window['-MSG-'].update(text_color='yellow')
+                window['-XPOS-'].update(f'X: ?')
+                window['-YPOS-'].update(f'Y: ?')
+                window['-ZPOS-'].update(f'Z: ?')
+                continue
+            else:
+                x,y,z,t,in_ez = log_data
 
         # Time in log file appears to depend on locality, not UTC.  time.time() returns unix time in UTC
         # so we have to subtract the offset (time.timezone).
