@@ -1,4 +1,6 @@
 import json
+import cmath
+import math
 import socket
 import logging
 import time
@@ -13,6 +15,7 @@ import tailer
 SETTINGS_FILE = Path(Path(__file__).parent, 'settings.cfg')
 DEFAULT_SETTINGS = {'precision': 1,
                     'update_freq': 500, 
+                    'coord_sys': 'cartesian',
                     'units': 'feet.inches',
                     'log_dir': str(Path('C:\Marvelmind\dashboard\logs')),
                     'hedge_addrs': '36,38',
@@ -22,6 +25,7 @@ DEFAULT_SETTINGS = {'precision': 1,
 SETTINGS_KEYS_TO_ELEMENT_KEYS = {
                     'precision': '-PREC-',
                     'update_freq': '-FREQ-', 
+                    'coord_sys': '-COORD_SYS-',
                     'units': '-UNITS-',
                     'log_dir': '-LOGDIR-',
                     'hedge_addrs': '-ADDR-',
@@ -30,7 +34,9 @@ SETTINGS_KEYS_TO_ELEMENT_KEYS = {
                     }
 
 UNITS_CHOICES = ['m', 'mm', 'inches', 'feet.inches']
+COORD_SYS_CHOICES = ['cartesian', 'cylindrical']
 PREC_CHOICES = [0,1,2]
+DEGREE_SIGN = u'\N{DEGREE SIGN}'
 
 
 def load_settings(settings_file, default_settings):
@@ -62,6 +68,7 @@ def create_settings_window(settings):
 
     layout = [  [sg.Text('Settings', font=('Work Sans', 12))],
                 [TextLabel('Track Hedge Address(es)'),sg.Input(key='-ADDR-')],
+                [TextLabel('Coordinate System'), sg.Combo(COORD_SYS_CHOICES, key='-COORD_SYS-')],
                 [TextLabel('Units'), sg.Combo(UNITS_CHOICES, key='-UNITS-')],
                 [TextLabel('Precision'), sg.Combo(PREC_CHOICES, key='-PREC-')],
                 [TextLabel('Refresh Rate (ms)'), sg.Input(key='-FREQ-')],
@@ -84,7 +91,7 @@ def create_settings_window(settings):
 def get_hedge_logfile(dir):
     """Find the log file by selecting the file with the most recent modification time in the logfile directory.
     If no file found, return None."""
-    logfiles = Path(dir).glob('*csv')
+    logfiles = Path(dir).glob('*')
     max_m_time = -1
     current_log = None
     for lf in logfiles:
@@ -110,6 +117,7 @@ def get_last_logfile_line(logfile, addr):
         if tries >= MAX_TRIES:
             return None
         with open(logfile, 'r') as f:
+            # grab last 10 lines from file
             lastlines = tailer.tail(f, 10)[:-2]  # exclude final line since it may only be partially written
         for line in lastlines[::-1]:  # iterate in reverse order to process latest data first
             fields = [x for x in line.strip().split(',') if x]  # we want to ignore the final empty field since most lines end with ','
@@ -120,7 +128,9 @@ def get_last_logfile_line(logfile, addr):
                     break
             except IndexError:
                 continue
-        tries += 1
+        if not addr_found:
+            tries += 1
+            time.sleep(0.1)
     return fields 
 
 
@@ -132,7 +142,7 @@ def parse_log_file_fields(fields):
     return x_m, y_m, z_m, unix_time, in_exclusion_zone
     
 
-def get_hedge_position_from_log(logfile, addrs, units='feet.inches', precision=0):
+def get_hedge_position_from_log(logfile, addrs, units='feet.inches', coord_sys='cartesian', precision=0):
     positions = {}
     in_exclusion_zone = False
     for addr in addrs:
@@ -154,6 +164,9 @@ def get_hedge_position_from_log(logfile, addrs, units='feet.inches', precision=0
         x = sum([positions[addr][0] for addr in addrs]) / len(addrs)
         y = sum([positions[addr][1] for addr in addrs]) / len(addrs)
         z = sum([positions[addr][2] for addr in addrs]) / len(addrs)
+    
+    if coord_sys == 'cylindrical': 
+        x, y = cmath.polar(complex(x,y))
 
     # X,Y,Z coordinates from logfile are in meters
     fmt = f' .{precision}f'
@@ -180,6 +193,11 @@ def get_hedge_position_from_log(logfile, addrs, units='feet.inches', precision=0
     else:
         logging.error('invalid units input. Exiting.')
         sys.exit(1)
+
+    if coord_sys == 'cylindrical':
+        # y coordinate becomes angle if coordinate system is cylindrincal.
+        # x,z already handled
+        y_str = f'{math.degrees(y):{fmt}}{DEGREE_SIGN}'
     
     return x_str, y_str, z_str, unix_time, in_exclusion_zone
 
@@ -256,6 +274,7 @@ def main():
             log_data = get_hedge_position_from_log(hedge_log, 
                                                         hedge_addrs, 
                                                         units=settings['units'],
+                                                        coord_sys=settings['coord_sys'],
                                                         precision=int(settings['precision']),
                                                         )
             if not log_data:
@@ -290,9 +309,14 @@ def main():
 
         window['-MSG-'].update(status_text)
         window['-MSG-'].update(text_color=status_text_color)
-        window['-XPOS-'].update(f'X: {x}')
-        window['-YPOS-'].update(f'Y: {y}')
-        window['-ZPOS-'].update(f'Z: {z}')
+        if settings['coord_sys'] == 'cartesian':
+            window['-XPOS-'].update(f'X: {x}')
+            window['-YPOS-'].update(f'Y: {y}')
+            window['-ZPOS-'].update(f'Z: {z}')
+        elif settings['coord_sys'] == 'cylindrical':
+            window['-XPOS-'].update(f'R: {x}')
+            window['-YPOS-'].update(f'P: {y}')
+            window['-ZPOS-'].update(f'Z: {z}')
 
     window.close()
 
