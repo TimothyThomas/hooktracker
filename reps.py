@@ -14,14 +14,14 @@ import tailer
 
 LOG_LEVEL = logging.DEBUG
 SETTINGS_FILE = Path(Path(__file__).parent, 'settings.cfg')
-DEFAULT_SETTINGS = {'precision': 1,
-                    'update_freq': 500, 
+DEFAULT_SETTINGS = {'precision': 0,
+                    'update_freq': 1000, 
                     'coord_sys': 'cartesian',
                     'units': 'feet.inches',
                     'log_dir': str(Path('C:\Marvelmind\dashboard\logs')),
                     'num_log_lines': 10,
                     'hedge_addrs': '36,38',
-                    'allowed_system_vs_log_time_delta': 1000,
+                    'allowed_system_vs_log_time_delta': 2000,
                     'color_theme': 'DarkBlue13', 
                     }
 SETTINGS_KEYS_TO_ELEMENT_KEYS = {
