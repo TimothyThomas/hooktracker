@@ -221,7 +221,10 @@ def calc_hedge_position(log_data, units='feet.inches', coord_sys='cartesian', pr
     if coord_sys == 'cylindrical':
         # y coordinate becomes angle if coordinate system is cylindrincal.
         # x,z already handled
-        y_str = f'{math.degrees(y):{fmt}}{DEGREE_SIGN}'
+        angle = math.degrees(y)
+        if angle < 0.0:
+            angle += 360.0  # it's desired to have angle range be 0,360 instead of -180,180
+        y_str = f'{angle:{fmt}}{DEGREE_SIGN}'
     
     return x_str, y_str, z_str, t, in_exclusion_zone
 
