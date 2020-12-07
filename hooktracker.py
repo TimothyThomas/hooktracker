@@ -12,12 +12,14 @@ from pathlib import Path
 import PySimpleGUIQt as sg
 import tailer
 
+LOG_LEVEL = logging.DEBUG
 SETTINGS_FILE = Path(Path(__file__).parent, 'settings.cfg')
 DEFAULT_SETTINGS = {'precision': 1,
                     'update_freq': 500, 
                     'coord_sys': 'cartesian',
                     'units': 'feet.inches',
                     'log_dir': str(Path('C:\Marvelmind\dashboard\logs')),
+                    'num_log_lines': 10,
                     'hedge_addrs': '36,38',
                     'allowed_system_vs_log_time_delta': 1000,
                     'color_theme': 'DarkBlue13', 
@@ -28,6 +30,7 @@ SETTINGS_KEYS_TO_ELEMENT_KEYS = {
                     'coord_sys': '-COORD_SYS-',
                     'units': '-UNITS-',
                     'log_dir': '-LOGDIR-',
+                    'num_log_lines': '-NUMLINES-',
                     'hedge_addrs': '-ADDR-',
                     'allowed_system_vs_log_time_delta': '-ALLOW_DELTA_T-',
                     'color_theme': '-THEME-',
@@ -35,8 +38,9 @@ SETTINGS_KEYS_TO_ELEMENT_KEYS = {
 
 UNITS_CHOICES = ['m', 'mm', 'inches', 'feet.inches']
 COORD_SYS_CHOICES = ['cartesian', 'cylindrical']
-PREC_CHOICES = [0,1,2]
+PREC_CHOICES = [0,1,2,3]
 DEGREE_SIGN = u'\N{DEGREE SIGN}'
+NEWLINE_INDENT = '\n  '
 
 
 def load_settings(settings_file, default_settings):
@@ -73,6 +77,7 @@ def create_settings_window(settings):
                 [TextLabel('Precision'), sg.Combo(PREC_CHOICES, key='-PREC-')],
                 [TextLabel('Refresh Rate (ms)'), sg.Input(key='-FREQ-')],
                 [TextLabel('Logfile Folder'),sg.Input(key='-LOGDIR-'), sg.FolderBrowse(target='-LOGDIR-')],
+                [TextLabel('Number of position values to average'),sg.Input(key='-NUMLINES-')],
                 [TextLabel('Time until log considered stale (ms)'), sg.Input(key='-ALLOW_DELTA_T-')],
                 [TextLabel('Color Theme'),sg.Combo(sg.theme_list(), key='-THEME-')],
                 [sg.Button('Save'), sg.Button('Restore Defaults'), sg.Button('Exit')]  ]
@@ -106,32 +111,37 @@ def get_hedge_logfile(dir):
     return current_log
 
 
-def get_last_logfile_line(logfile, addr):
-    """Return most recent complete line written to CSV log file for hedge addr.""" 
-    addr_found = False
-    last_line = None 
-    fields = []
-    MAX_TRIES = 20 
-    tries = 0
-    while not addr_found:
-        if tries >= MAX_TRIES:
-            return None
+def get_last_logfile_lines(logfile, addrs, n=10):
+    """Return last n complete lines (as lists of fields) written to the CSV log file 
+    for each hedge addr.""" 
+
+    # Try to grab more than we need n*3 since the number of lines we need is actually
+    # n times the number of beacon addresses.
+    # tailer.tail() will grab all lines if the requested number is less than the total.
+    enough_lines = False
+    d = {addr: [] for addr in addrs}
+    while not enough_lines:
         with open(logfile, 'r') as f:
-            # grab last 10 lines from file
-            lastlines = tailer.tail(f, 10)[:-2]  # exclude final line since it may only be partially written
-        for line in lastlines[::-1]:  # iterate in reverse order to process latest data first
-            fields = [x for x in line.strip().split(',') if x]  # we want to ignore the final empty field since most lines end with ','
-            try:
-                if int(fields[3]) == addr:
-                    addr_found = True
-                    last_line = line
-                    break
-            except IndexError:
-                continue
-        if not addr_found:
-            tries += 1
-            time.sleep(0.1)
-    return fields 
+            lastlines = tailer.tail(f, n*5)
+            lastlines = lastlines[1:-1]  # exclude first/last line since they might only be partially written.
+        # need at least 1 line for each address
+        # Note that we may not get the requested number of lines.
+        # No big deal since we will just return what we have and the next tick will attempt again.
+
+        for line in lastlines:
+            fields = [x for x in line.strip().split(',') if x]
+            addr = int(fields[3])
+            if addr in addrs and (len(d[addr]) < n):
+                d[addr].append(fields)
+        
+        # make sure we have at least one data point (i.e. row/line) for each address
+        # Otherwise, we just loop again. 
+        # This check needed because occasionally, the logfile has data for stationary beacons.
+        if all([d[addr] for addr in addrs]):
+            enough_lines = True
+        
+    logging.debug(f"Parsing these lines from logfile:\n  {NEWLINE_INDENT.join(lastlines)}")
+    return d 
 
 
 def parse_log_file_fields(fields):
@@ -142,28 +152,42 @@ def parse_log_file_fields(fields):
     return x_m, y_m, z_m, unix_time, in_exclusion_zone
     
 
-def get_hedge_position_from_log(logfile, addrs, units='feet.inches', coord_sys='cartesian', precision=0):
+def calc_hedge_position(log_data, units='feet.inches', coord_sys='cartesian', precision=0):
     positions = {}
     in_exclusion_zone = False
-    for addr in addrs:
-        log_data = get_last_logfile_line(logfile, addr)
-        if not log_data:
-            logging.error(f'Unable to find log data for address {addr}.')
-            return None
-        else:
-            logging.info(f'Logfile data: {log_data}')
-        x, y, z, unix_time, in_ez = parse_log_file_fields(log_data)
-        positions[addr] = (x,y,z)
-        if in_ez:
-            in_exclusion_zone = True  # if any hedge is in an exclusion zone, we return True 
 
-    if len(addrs) == 1:
-        x,y,z = positions[addrs[0]]
-    else:
-        # Get average of all hedges
-        x = sum([positions[addr][0] for addr in addrs]) / len(addrs)
-        y = sum([positions[addr][1] for addr in addrs]) / len(addrs)
-        z = sum([positions[addr][2] for addr in addrs]) / len(addrs)
+    # Calculate average position of each hedge individually.
+    while log_data:
+        addr, fields_list = log_data.popitem()
+        logging.debug(f"Calculating avg pos for addr {addr} from fields:\n  {NEWLINE_INDENT.join([','.join(f) for f in fields_list])}")
+        xa, ya, za, ta, eza = [], [], [], [], []
+        for fields in fields_list:
+            x, y, z, t, ez = parse_log_file_fields(fields)
+            xa.append(x)
+            ya.append(y)
+            za.append(z)
+            ta.append(t)
+            eza.append(ez)
+
+        xavg = sum(xa) / len(xa) 
+        yavg = sum(ya) / len(ya) 
+        zavg = sum(za) / len(za) 
+        tavg = sum(ta) / len(ta) 
+        ez = len([v for v in eza if ez])
+        # If about half of the ez values are True for any hedge, we return True
+        if ez > len(eza) // 2:
+            in_exclusion_zone = True  # if any hedge is in an exclusion zone, we return True 
+        positions[addr] = (xavg,yavg,zavg,tavg)
+
+        logging.debug(f"{addr=} {xavg=}, {yavg=}, {zavg=}, {tavg=}") 
+
+    # Get average of all hedges positions and time stamps.
+    x = sum([positions[k][0] for k in positions]) / len(positions)
+    y = sum([positions[k][1] for k in positions]) / len(positions)
+    z = sum([positions[k][2] for k in positions]) / len(positions)
+    t = sum([positions[k][3] for k in positions]) / len(positions)
+
+    logging.debug(f"Final average: {x=}, {y=}, {z=}, {t=}") 
     
     if coord_sys == 'cylindrical': 
         x, y = cmath.polar(complex(x,y))
@@ -199,14 +223,14 @@ def get_hedge_position_from_log(logfile, addrs, units='feet.inches', coord_sys='
         # x,z already handled
         y_str = f'{math.degrees(y):{fmt}}{DEGREE_SIGN}'
     
-    return x_str, y_str, z_str, unix_time, in_exclusion_zone
+    return x_str, y_str, z_str, t, in_exclusion_zone
 
 
 def create_main_window(settings):
     sg.theme(settings['color_theme'])
     layout = [
                 [sg.Image('assets/RVB_FRAMATOME_HD_15pct.png')],
-                [sg.Text('Crane Hook Tracker', justification='center', font=('Work Sans', 14))],
+                [sg.Text('REPS Tracking System', justification='center', font=('Work Sans', 14))],
                 [sg.Text(' '*30)],
                 [sg.Text(' '*30)],
                 [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-XPOS-')],
@@ -224,7 +248,7 @@ def create_main_window(settings):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=LOG_LEVEL)
     window, settings = None, load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
     
     in_exclusion_zone = False
@@ -271,12 +295,13 @@ def main():
                 continue
 
             logging.info(f"Tracking hedge addresses: {hedge_addrs}")
-            log_data = get_hedge_position_from_log(hedge_log, 
-                                                        hedge_addrs, 
-                                                        units=settings['units'],
-                                                        coord_sys=settings['coord_sys'],
-                                                        precision=int(settings['precision']),
-                                                        )
+            log_lines = get_last_logfile_lines(hedge_log, hedge_addrs, n=int(settings['num_log_lines']))
+
+            log_data = calc_hedge_position(log_lines, 
+                                           units=settings['units'],
+                                           coord_sys=settings['coord_sys'],
+                                           precision=int(settings['precision']),
+                                          )
             if not log_data:
                 logging.error(f'Unable to get logfile data for addresses {hedge_addrs}.')
                 window['-MSG-'].update(f'No data for addresses:\n{hedge_addrs}.')
@@ -291,7 +316,7 @@ def main():
         # Time in log file appears to depend on locality, not UTC.  time.time() returns unix time in UTC
         # so we have to subtract the offset (time.timezone).
         sys_log_time_delta = time.time() - time.timezone - t/1000.
-        logging.debug(f'Time delta:  {sys_log_time_delta} sec.')
+        logging.debug(f'Time delta:  {sys_log_time_delta:.3f} sec.')
         if sys_log_time_delta > float(settings['allowed_system_vs_log_time_delta'])/1000.:
             logging.warning(f'Time difference ({sys_log_time_delta}) between logfile and system time exceeds threshold.')
             status_text = "Log data stale.\nPosition may be inaccurate."
