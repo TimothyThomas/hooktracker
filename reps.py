@@ -253,9 +253,9 @@ def create_main_window(settings):
 def main():
     logging.basicConfig(level=LOG_LEVEL)
     window, settings = None, load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
+    orig_status_background = sg.LOOK_AND_FEEL_TABLE[settings['color_theme']]['BACKGROUND']
     
     in_exclusion_zone = False
-    msg_on = True  # funky way to make EXCL. ZONE message flash 
 
     while True:
         if window is None:
@@ -324,19 +324,21 @@ def main():
             logging.warning(f'Time difference ({sys_log_time_delta}) between logfile and system time exceeds threshold.')
             status_text = "Log data stale.\nPosition may be inaccurate."
             status_text_color = 'yellow'
+            status_background = orig_status_background 
         elif in_ez:
             logging.warning("Hedge in an exclusion zone!!")
-            status_text = 'EXCLUSION ZONE' if msg_on else '' 
-            msg_on = False if msg_on else True
+            status_text = '   !!  EXCLUSION ZONE  !!'
             status_text_color = 'red'
             winsound.PlaySound("assets/alarm2.wav", winsound.SND_ASYNC | winsound.SND_LOOP)
+            status_background = 'white'
         else:
             status_text = 'OK'
             status_text_color = 'green'
+            status_background = orig_status_background 
             winsound.PlaySound(None, winsound.SND_ASYNC)
 
         window['-MSG-'].update(status_text)
-        window['-MSG-'].update(text_color=status_text_color)
+        window['-MSG-'].update(text_color=status_text_color, background_color=status_background)
         if settings['coord_sys'] == 'cartesian':
             window['-XPOS-'].update(f'X: {x}')
             window['-YPOS-'].update(f'Y: {y}')
