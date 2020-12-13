@@ -28,5 +28,7 @@ dependencies:
   - wheel=0.35.1=pyhd3eb1b0_0
   - wincertstore=0.2=py39h2bbff1b_0
   - zlib=1.2.11=h62dcd97_4
+  - pip:
+    - tailer==0.4.1
 prefix: C:\Users\tim-gaming-desktop\miniconda3\envs\hooktracker
 
