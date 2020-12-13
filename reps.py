@@ -6,13 +6,15 @@ import logging
 import time
 import sys
 import os
+import subprocess
 import winsound
+from datetime import datetime
 from pathlib import Path
 
 import PySimpleGUIQt as sg
 import tailer
 
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 SETTINGS_FILE = Path(Path(__file__).parent, 'settings.cfg')
 DEFAULT_SETTINGS = {'precision': 0,
                     'update_freq': 1000, 
@@ -105,7 +107,7 @@ def get_hedge_logfile(dir):
             max_m_time = mtime
             current_log = lf
     if current_log:
-        logging.info(f"Reading hedge logfile {current_log}.")
+        logging.debug(f"Reading hedge logfile {current_log}.")
     else:
         logging.warning(f"No hedge log found. Ensure hedge logfile is being written and correct address is entered in settings.")
     return current_log
@@ -187,7 +189,7 @@ def calc_hedge_position(log_data, units='feet.inches', coord_sys='cartesian', pr
     z = sum([positions[k][2] for k in positions]) / len(positions)
     t = sum([positions[k][3] for k in positions]) / len(positions)
 
-    logging.debug(f"Final average: {x=}, {y=}, {z=}, {t=}") 
+    logging.info(f"Final average: {x=:.3f}, {y=:.3f}, {z=:.3f}, {t=}") 
     
     if coord_sys == 'cylindrical': 
         x, y = cmath.polar(complex(x,y))
@@ -236,9 +238,11 @@ def create_main_window(settings):
                 [sg.Text('REPS Tracking System', justification='center', font=('Work Sans', 14))],
                 [sg.Text(' '*30)],
                 [sg.Text(' '*30)],
-                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-XPOS-')],
-                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-YPOS-')],
-                [sg.Text(size=(17,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-ZPOS-')],
+                [sg.Text(size=(16,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-XPOS-')],
+                [sg.Text(size=(16,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-YPOS-')],
+                [sg.Text(size=(16,1)), sg.Text(justification='left', font=('Work Sans', 20), key='-ZPOS-')],
+                [sg.Text(' '*40)],
+                [sg.Button('Save Current Position', font=('Work Sans', 12))],
                 [sg.Text('_'*64)],
                 [sg.Text(' '*40)],
                 [sg.Text('  Status:  ', size=(11,1), font=('Work Sans', 20)), 
@@ -254,6 +258,9 @@ def main():
     logging.basicConfig(level=LOG_LEVEL)
     window, settings = None, load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
     orig_status_background = sg.LOOK_AND_FEEL_TABLE[settings['color_theme']]['BACKGROUND']
+    position_logfile = Path(f'position_log_{datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")}.txt') 
+    loc_idx = 1
+    notepad_proc = None
     
     in_exclusion_zone = False
 
@@ -277,6 +284,7 @@ def main():
                 settings = load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
             continue
 
+
         hedge_log = get_hedge_logfile(settings['log_dir'])
         if not hedge_log:
             logging.error('No log file found. Check log directory in settings.')
@@ -297,7 +305,7 @@ def main():
                 window['-ZPOS-'].update(f'Z: ?')
                 continue
 
-            logging.info(f"Tracking hedge addresses: {hedge_addrs}")
+            logging.info(f"Tracking hedge address(es): {', '.join([str(a) for a in hedge_addrs])}")
             log_lines = get_last_logfile_lines(hedge_log, hedge_addrs, n=int(settings['num_log_lines']))
 
             log_data = calc_hedge_position(log_lines, 
@@ -340,13 +348,31 @@ def main():
         window['-MSG-'].update(status_text)
         window['-MSG-'].update(text_color=status_text_color, background_color=status_background)
         if settings['coord_sys'] == 'cartesian':
-            window['-XPOS-'].update(f'X: {x}')
-            window['-YPOS-'].update(f'Y: {y}')
-            window['-ZPOS-'].update(f'Z: {z}')
+            x_str = f'X: {x}'
+            y_str = f'Y: {y}'
+            z_str = f'Z: {z}'
         elif settings['coord_sys'] == 'cylindrical':
-            window['-XPOS-'].update(f'R: {x}')
-            window['-YPOS-'].update(f'P: {y}')
-            window['-ZPOS-'].update(f'Z: {z}')
+            x_str = f'R: {x}'
+            y_str = f'P: {y}'
+            z_str = f'Z: {z}'
+        window['-XPOS-'].update(x_str)
+        window['-YPOS-'].update(y_str)
+        window['-ZPOS-'].update(z_str)
+
+        if event == 'Save Current Position':
+            loc_label = sg.popup_get_text('Provide a name for current position: ',
+                                keep_on_top=True,
+                                size=(40,1),
+                                title='Save Current Position',
+                                default_text=f'Location {loc_idx}')
+            if loc_label:
+                loc_idx += 1
+                logging.info(f"Location '{loc_label}' saved to {position_logfile.absolute()}.")
+                with position_logfile.open('a') as f:
+                    f.write(f'{loc_label}\n{x_str}\n{y_str}\n{z_str}\n\n')
+                if notepad_proc:
+                    notepad_proc.terminate()
+                notepad_proc = subprocess.Popen(["notepad", position_logfile.absolute()])
 
     window.close()
 
