@@ -122,7 +122,10 @@ def get_last_logfile_lines(logfile, addrs, n=10):
     # tailer.tail() will grab all lines if the requested number is less than the total.
     enough_lines = False
     d = {addr: [] for addr in addrs}
+    max_tries = 10
+    num_tries = 0
     while not enough_lines:
+        num_tries += 1
         with open(logfile, 'r') as f:
             lastlines = tailer.tail(f, n*5)
             lastlines = lastlines[1:-1]  # exclude first/last line since they might only be partially written.
@@ -134,8 +137,8 @@ def get_last_logfile_lines(logfile, addrs, n=10):
             fields = [x for x in line.strip().split(',') if x]
             try:
                 addr = int(fields[3])
-            except IndexError:
-                break
+            except ValueError:
+                continue
             if addr in addrs and (len(d[addr]) < n):
                 d[addr].append(fields)
         
@@ -144,6 +147,9 @@ def get_last_logfile_lines(logfile, addrs, n=10):
         # This check needed because occasionally, the logfile has data for stationary beacons.
         if all([d[addr] for addr in addrs]):
             enough_lines = True
+        
+        if num_tries >= max_tries:
+            return None
         
     logging.debug(f"Parsing these lines from logfile:\n  {NEWLINE_INDENT.join(lastlines)}")
     return d 
@@ -234,7 +240,7 @@ def calc_hedge_position(log_data, units='feet.inches', coord_sys='cartesian', pr
     return x_str, y_str, z_str, t, in_exclusion_zone
 
 
-def create_main_window(settings):
+def create_main_window(settings, status, loc=(None,None)):
     sg.theme(settings['color_theme'])
     layout = [
                 [sg.Image('assets/RVB_FRAMATOME_HD_15pct.png')],
@@ -249,29 +255,52 @@ def create_main_window(settings):
                 [sg.Text('_'*64)],
                 [sg.Text(' '*40)],
                 [sg.Text('  Status:  ', size=(11,1), font=('Work Sans', 20)), 
-                 sg.Text('Acquiring Location', size=(34,2), font=('Work Sans', 20), justification='left', text_color='yellow', key='-MSG-')],
+                 #sg.Text('Acquiring Location', size=(34,2), font=('Work Sans', 20), justification='left', text_color='yellow', key='-MSG-')],
+                 sg.Text(status, size=(34,2), font=('Work Sans', 20), justification='left', text_color='yellow', key='-MSG-')],
                 [sg.Text(' '*40)],
                 [sg.Text(' '*40)],
                 [sg.Button('Exit', font=('Work Sans', 12)), sg.Button('Settings', font=('Work Sans', 12))],
              ]
-    return sg.Window('Hook Tracker', layout=layout, keep_on_top=True, resizable=False, icon='assets/favicon.ico')
+    return sg.Window('REPS', layout=layout, keep_on_top=True, location=loc, resizable=False, icon='assets/favicon.ico')
 
 
 def main():
     logging.basicConfig(level=LOG_LEVEL)
     window, settings = None, load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
-    orig_status_background = sg.LOOK_AND_FEEL_TABLE[settings['color_theme']]['BACKGROUND']
+    orig_color_theme = settings['color_theme']
     position_logfile = Path(f'position_log_{datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")}.txt') 
     loc_idx = 1
     notepad_proc = None
+    status = 'Acquiring Location'
+    prev_status = status
+    cur_loc = (None,None)
+    EZ_THEME = 'HotDogStand'
     
-    in_exclusion_zone = False
+    in_ez = False
+    x_str, y_str, z_str = 'X: ?', 'Y: ?', 'Z: ?'
 
     while True:
+        if prev_status != status: 
+            if in_ez:
+                settings['color_theme'] = EZ_THEME 
+                cur_loc = window.current_location()
+                window.close()
+                window = None
+            else:
+                settings['color_theme'] = orig_color_theme 
+                cur_loc = window.current_location()
+                window.close()
+                window = None
+        prev_status = status
+        
         if window is None:
-            window = create_main_window(settings)
+            window = create_main_window(settings, status, loc=cur_loc)
 
         event, values = window.read(timeout=int(settings['update_freq']))
+        window['-XPOS-'].update(x_str)
+        window['-YPOS-'].update(y_str)
+        window['-ZPOS-'].update(z_str)
+
         if event in (sg.WIN_CLOSED,  'Exit'):
             break
         if event == 'Settings':
@@ -286,7 +315,6 @@ def main():
                 window = None
                 settings = load_settings(SETTINGS_FILE, DEFAULT_SETTINGS) 
             continue
-
 
         hedge_log = get_hedge_logfile(settings['log_dir'])
         if not hedge_log:
@@ -308,24 +336,23 @@ def main():
                 window['-ZPOS-'].update(f'Z: ?')
                 continue
 
-            logging.info(f"Tracking hedge address(es): {', '.join([str(a) for a in hedge_addrs])}")
+            hedge_addrs_str = ', '.join([str(a) for a in hedge_addrs])
+            logging.info(f"Tracking hedge address(es): {hedge_addrs_str}")
             log_lines = get_last_logfile_lines(hedge_log, hedge_addrs, n=int(settings['num_log_lines']))
-
-            log_data = calc_hedge_position(log_lines, 
-                                           units=settings['units'],
-                                           coord_sys=settings['coord_sys'],
-                                           precision=int(settings['precision']),
-                                          )
-            if not log_data:
-                logging.error(f'Unable to get logfile data for addresses {hedge_addrs}.')
-                window['-MSG-'].update(f'No data for addresses:\n{hedge_addrs}.')
+            if not log_lines:
+                logging.error(f'Unable to get logfile data for all addresses {hedge_addrs_str}.')
+                window['-MSG-'].update(f'No data for\naddress(es): {hedge_addrs_str}')
                 window['-MSG-'].update(text_color='yellow')
                 window['-XPOS-'].update(f'X: ?')
                 window['-YPOS-'].update(f'Y: ?')
                 window['-ZPOS-'].update(f'Z: ?')
                 continue
-            else:
-                x,y,z,t,in_ez = log_data
+
+            x,y,z,t,in_ez = calc_hedge_position(log_lines, 
+                                                units=settings['units'],
+                                                coord_sys=settings['coord_sys'],
+                                                precision=int(settings['precision']),
+                                               )
 
         # Time in log file appears to depend on locality, not UTC.  time.time() returns unix time in UTC
         # so we have to subtract the offset (time.timezone).
@@ -333,23 +360,20 @@ def main():
         logging.debug(f'Time delta:  {sys_log_time_delta:.3f} sec.')
         if sys_log_time_delta > float(settings['allowed_system_vs_log_time_delta'])/1000.:
             logging.warning(f'Time difference ({sys_log_time_delta}) between logfile and system time exceeds threshold.')
-            status_text = "Log data stale.\nPosition may be inaccurate."
+            status = "Log data stale.\nPosition may be inaccurate."
             status_text_color = 'yellow'
-            status_background = orig_status_background 
         elif in_ez:
             logging.warning("Hedge in an exclusion zone!!")
-            status_text = '   !!  EXCLUSION ZONE  !!'
-            status_text_color = 'red'
+            status = '   !!  EXCLUSION ZONE  !!'
+            status_text_color = 'yellow'
             winsound.PlaySound("assets/alarm2.wav", winsound.SND_ASYNC | winsound.SND_LOOP)
-            status_background = 'white'
         else:
-            status_text = 'OK'
+            status = 'OK'
             status_text_color = 'green'
-            status_background = orig_status_background 
             winsound.PlaySound(None, winsound.SND_ASYNC)
 
-        window['-MSG-'].update(status_text)
-        window['-MSG-'].update(text_color=status_text_color, background_color=status_background)
+        window['-MSG-'].update(status)
+        window['-MSG-'].update(text_color=status_text_color)
         if settings['coord_sys'] == 'cartesian':
             x_str = f'X: {x}'
             y_str = f'Y: {y}'
@@ -358,9 +382,6 @@ def main():
             x_str = f'R: {x}'
             y_str = f'P: {y}'
             z_str = f'Z: {z}'
-        window['-XPOS-'].update(x_str)
-        window['-YPOS-'].update(y_str)
-        window['-ZPOS-'].update(z_str)
 
         if event == 'Save Current Position':
             loc_label = sg.popup_get_text('Provide a name for current position: ',
