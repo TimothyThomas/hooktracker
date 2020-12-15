@@ -132,7 +132,10 @@ def get_last_logfile_lines(logfile, addrs, n=10):
 
         for line in lastlines:
             fields = [x for x in line.strip().split(',') if x]
-            addr = int(fields[3])
+            try:
+                addr = int(fields[3])
+            except IndexError:
+                break
             if addr in addrs and (len(d[addr]) < n):
                 d[addr].append(fields)
         
